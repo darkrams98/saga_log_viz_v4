@@ -1,0 +1,45 @@
+# =====================================================================
+#  Backend — ساخت چندمرحله‌ای
+# =====================================================================
+#  مرحلهٔ اول وابستگی‌ها را جدا cache می‌کند: تا وقتی pom.xml عوض نشود،
+#  build بعدی وابستگی‌ها را دوباره دانلود نمی‌کند. روی شبکهٔ داخلی بانک
+#  که به mirror وصل است، این تفاوت بین ۳۰ ثانیه و ۱۰ دقیقه است.
+# =====================================================================
+
+FROM maven:3.9-eclipse-temurin-21 AS build
+WORKDIR /build
+
+COPY backend/pom.xml .
+RUN mvn -B -q dependency:go-offline
+
+COPY backend/src ./src
+RUN mvn -B -q clean package -DskipTests
+
+# ---------------------------------------------------------------------
+
+FROM eclipse-temurin:21-jre-alpine
+WORKDIR /app
+
+# کاربر غیر-root. سرویسی که فقط می‌خواند، هیچ دلیلی برای root بودن ندارد.
+RUN addgroup -S logviewer && adduser -S -G logviewer logviewer \
+ && mkdir -p /app/config /app/data \
+ && chown -R logviewer:logviewer /app
+
+COPY --from=build --chown=logviewer:logviewer /build/target/*.jar /app/app.jar
+
+USER logviewer
+EXPOSE 8080
+
+# پیکربندی و تاریخچه از بیرون mount می‌شوند تا با هر deploy از بین نروند
+VOLUME ["/app/config", "/app/data"]
+
+ENV JAVA_OPTS="-XX:MaxRAMPercentage=75 -XX:+UseSerialGC -Djava.security.egd=file:/dev/./urandom"
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+  CMD wget -qO- http://127.0.0.1:8080/actuator/health | grep -q '"status":"UP"' || exit 1
+
+ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS \
+  -Dlogexplorer.config=/app/config/config.yaml \
+  -Dlogexplorer.labels=/app/config/config.json \
+  -Dlogexplorer.admin.audit-file=/app/data/admin-audit.log \
+  -jar /app/app.jar"]

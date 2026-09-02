@@ -1,0 +1,70 @@
+# =====================================================================
+#  استقرار با Docker Compose
+# =====================================================================
+#  از ریشهٔ پروژه اجرا کنید:
+#      cp deploy/docker/.env.example .env
+#      # .env را پر کنید (به‌ویژه ADMIN_TOKEN و MONGO_URI)
+#      docker compose -f deploy/docker/docker-compose.yml --env-file .env up -d --build
+#
+#  ⚠️ MongoDB اینجا تعریف نشده — عمداً. این سرویس فقط‌خواندنی است و به
+#     پایگاه دادهٔ *موجود* شما وصل می‌شود. راه‌اندازی Mongo داخل compose
+#     یعنی خطر اینکه کسی سهواً به نمونهٔ اشتباهی وصل شود.
+# =====================================================================
+
+services:
+  backend:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.backend
+    image: saga-log-viewer-backend:2.1.0
+    restart: unless-stopped
+    environment:
+      MONGO_URI:        ${MONGO_URI:?متغیر MONGO_URI الزامی است}
+      MONGO_DB:         ${MONGO_DB:-saga}
+      MONGO_COLLECTION: ${MONGO_COLLECTION:-sagaSequence}
+      # خالی گذاشتن یعنی صفحهٔ مدیریتی کاملاً غیرفعال است (fail-closed)
+      ADMIN_TOKEN:      ${ADMIN_TOKEN:-}
+      TZ:               ${TZ:-Asia/Tehran}
+      JAVA_OPTS:        ${JAVA_OPTS:--XX:MaxRAMPercentage=75 -XX:+UseSerialGC}
+    volumes:
+      # پیکربندی از بیرون می‌آید تا با هر build از بین نرود،
+      # و ویرایش‌های صفحهٔ مدیریتی روی همین حجم باقی بماند.
+      - ../../config:/app/config
+      - logviewer-data:/app/data
+    networks: [logviewer]
+    # سرویس فقط‌خواندنی، فایل‌سیستم فقط‌خواندنی. حجم‌های بالا استثنا هستند.
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+  frontend:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.frontend
+    image: saga-log-viewer-frontend:2.1.0
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      # فقط روی لوپ‌بک. TLS و انتشار بیرونی کار پروکسی لبه است.
+      - "${BIND_ADDRESS:-127.0.0.1}:${HTTP_PORT:-8081}:80"
+    volumes:
+      - ../nginx/limits.conf:/etc/nginx/conf.d/00-limits.conf:ro
+      - ../nginx/proxy_params_logviewer.conf:/etc/nginx/proxy_params_logviewer.conf:ro
+    networks: [logviewer]
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  logviewer-data:
+
+networks:
+  logviewer:
+    driver: bridge

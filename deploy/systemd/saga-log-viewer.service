@@ -1,0 +1,78 @@
+# =====================================================================
+#  systemd unit — استقرار مستقیم روی سرور لینوکس
+# =====================================================================
+#  نصب:
+#      sudo cp deploy/systemd/saga-log-viewer.service /etc/systemd/system/
+#      sudo systemctl daemon-reload
+#      sudo systemctl enable --now saga-log-viewer
+# =====================================================================
+
+[Unit]
+Description=Saga Log Viewer (read-only)
+Documentation=file:/opt/log-viewer/docs/07-deployment.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=logviewer
+Group=logviewer
+WorkingDirectory=/opt/log-viewer
+
+# رمز اتصال و توکن مدیریتی اینجا نیستند — در فایلی با مجوز ۶۰۰ هستند
+EnvironmentFile=/etc/log-viewer/env
+
+ExecStart=/usr/bin/java \
+    -XX:MaxRAMPercentage=75 \
+    -XX:+UseSerialGC \
+    -Djava.security.egd=file:/dev/./urandom \
+    -Dfile.encoding=UTF-8 \
+    -Duser.timezone=Asia/Tehran \
+    -Dlogexplorer.config=/etc/log-viewer/config.yaml \
+    -Dlogexplorer.labels=/etc/log-viewer/config.json \
+    -Dlogexplorer.admin.audit-file=/var/lib/log-viewer/admin-audit.log \
+    -jar /opt/log-viewer/app.jar
+
+# بازخوانی پیکربندی بدون قطعی:  systemctl reload saga-log-viewer
+ExecReload=/usr/bin/curl -fsS -X POST http://127.0.0.1:8080/api/v1/meta/config/reload
+
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+
+# ------------------------------------------------------------- سخت‌سازی
+#
+# سرویسی که فقط می‌خواند، به هیچ‌کدام از این‌ها نیاز ندارد. هر خط
+# یک راه سوءاستفاده را می‌بندد، حتی اگر روزی در کد اشکالی پیدا شود.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+# تنها دو مسیری که سرویس اجازهٔ نوشتن دارد:
+#   - تاریخچهٔ تغییرات مدیریتی
+#   - پیکربندی و پشتیبان‌هایش (فقط اگر ویرایش از صفحهٔ مدیریتی لازم است)
+ReadWritePaths=/var/lib/log-viewer
+ReadWritePaths=/etc/log-viewer
+
+LimitNOFILE=65536
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=log-viewer
+
+[Install]
+WantedBy=multi-user.target
